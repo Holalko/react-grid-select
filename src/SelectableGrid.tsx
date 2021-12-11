@@ -1,7 +1,8 @@
 import * as React from "react";
 import "./selectable-grid.scss";
-import { range } from "./utils";
+import { intersects, range } from "./utils";
 import { GridItemRef } from "./GridItem";
+
 type ISelectableGridProps = {
   rows: number;
   cols: number;
@@ -11,53 +12,39 @@ type ISelectableGridProps = {
 
 type Position = { x: number; y: number };
 
-interface IntersectsParams {
-  minAx: number;
-  minAy: number;
-  maxAx: number;
-  maxAy: number;
-  minBx: number;
-  minBy: number;
-  maxBx: number;
-  maxBy: number;
-}
-
-function intersects({
-  minAx,
-  minAy,
-  maxAx,
-  maxAy,
-  minBx,
-  minBy,
-  maxBx,
-  maxBy,
-}: IntersectsParams) {
-  const aLeftOfB = maxAx < minBx;
-  const aRightOfB = minAx > maxBx;
-  const aAboveB = minAy > maxBy;
-  const aBelowB = maxAy < minBy;
-
-  return !(aLeftOfB || aRightOfB || aAboveB || aBelowB);
-}
-
 export const SelectableGrid: React.FC<ISelectableGridProps> = React.memo(
   ({ children, rows, cols, onSelect }) => {
+    const currRow = React.useRef(1);
+    const nextStart = React.useRef(1);
+    const calculating = React.useRef(false);
+
     const style = React.useMemo(
       () => ({
-        gridTemplateRows: range(rows)
-          .map(() => "1fr")
-          .join(" "),
-        gridTemplateColumns: range(cols)
-          .map(() => "1fr")
-          .join(" "),
+        gridTemplateRows: `repeat(${rows}, 1fr)`,
+        gridTemplateColumns: `repeat(${cols}, 1fr)`,
       }),
       [rows, cols]
     );
+
+    React.useEffect(() => {
+      currRow.current = 1;
+      nextStart.current = 1;
+    }, []);
 
     const items = React.useMemo(
       () => range(rows * cols).map(() => React.createRef<GridItemRef>()),
       [rows, cols]
     );
+
+    const itemsForWorker = React.useRef<
+      Array<{
+        top: number;
+        left: number;
+        width: number;
+        height: number;
+        id: GridItemRef["id"];
+      }>
+    >([]);
     const selectedItemsIds = React.useRef<Array<GridItemRef["id"]>>([]);
     const selectionArea = React.useRef<HTMLDivElement>(null);
     const mouseStart = React.useRef<Position | null>(null);
@@ -65,11 +52,54 @@ export const SelectableGrid: React.FC<ISelectableGridProps> = React.memo(
     const isMouseDown = React.useRef(false);
     const shouldAnimate = React.useRef(true);
 
+    const worker = React.useMemo(() => {
+      const w = new Worker(`${process.env.PUBLIC_URL}/calculator-worker.js`);
+      w.onmessage = (event) => {
+        calculating.current = true;
+        let newSelectedIds = [...selectedItemsIds.current];
+        if (event.data.length === 0) {
+          calculating.current = false;
+
+          return;
+        }
+
+        event.data.indexesToRemoveFromCurrentlySelected.forEach(
+          (index: number) => {
+            newSelectedIds[index] = null as any; // :)
+          }
+        );
+
+        event.data.inSelectionIds.forEach(
+          ({
+            index,
+            isSelected,
+            id,
+          }: {
+            index: number;
+            isSelected: boolean;
+            id: GridItemRef["id"];
+          }) => {
+            if (isSelected) {
+              items[index].current!.select();
+              newSelectedIds = [...newSelectedIds, id];
+            } else {
+              items[index].current!.deselect();
+            }
+          }
+        );
+
+        selectedItemsIds.current = newSelectedIds.filter(Boolean);
+        calculating.current = false;
+      };
+      return w;
+    }, [items]);
+
     const mouseDown: React.MouseEventHandler<HTMLDivElement> = (e) => {
       if (!e.shiftKey) {
         items.forEach((item) => {
-          item.current!.deselect();
+          item.current?.deselect();
         });
+        selectedItemsIds.current = [];
       }
       mouseStart.current = { x: e.clientX, y: e.clientY };
       isMouseDown.current = true;
@@ -91,46 +121,65 @@ export const SelectableGrid: React.FC<ISelectableGridProps> = React.memo(
       selectionArea.current!.style.width = `${SAwidth}px`;
       selectionArea.current!.style.height = `${SAheight}px`;
 
-      if (!isShiftKey) {
-        selectedItemsIds.current = [];
+      if (itemsForWorker.current.length === 0) {
+        itemsForWorker.current = items.map((item) => ({
+          top: item.current!.top,
+          left: item.current!.left,
+          width: item.current!.width,
+          height: item.current!.height,
+          id: item.current!.id,
+        }));
       }
 
-      for (let i = 0; i < items.length; i++) {
-        const { top, left, width, height, select, deselect, id } = items[
-          i
-        ].current!;
-
-        if (SAtop > top + height) {
-          i += cols - 1;
-          continue;
-        }
-
-        if (SAtop + SAheight < top) {
-          break;
-        }
-
-        if (isShiftKey && selectedItemsIds.current.includes(id)) {
-          continue;
-        }
-
-        if (
-          intersects({
-            minAx: left,
-            minAy: top,
-            maxAx: left + width,
-            maxAy: top + height,
-            minBx: SAleft,
-            minBy: SAtop,
-            maxBx: SAleft + SAwidth,
-            maxBy: SAtop + SAheight,
-          })
-        ) {
-          select();
-          selectedItemsIds.current = [...selectedItemsIds.current, id];
-        } else {
-          deselect();
-        }
+      if (!calculating.current) {
+        worker.postMessage({
+          items: itemsForWorker.current,
+          currentlySelected: selectedItemsIds.current,
+          SAtop,
+          SAleft,
+          SAwidth,
+          SAheight,
+        });
       }
+
+      // if (!isShiftKey) {
+      //   selectedItemsIds.current = [];
+      // }
+
+      // for (let item of items) {
+      //   if (!item.current) break;
+      //   const {
+      //     top,
+      //     left,
+      //     width,
+      //     height,
+      //     select,
+      //     deselect,
+      //     id,
+      //   } = item.current!;
+      //
+      //   if (isShiftKey && selectedItemsIds.current.includes(id)) {
+      //     continue;
+      //   }
+      //
+      //   if (
+      //     intersects({
+      //       minAx: left,
+      //       minAy: top,
+      //       maxAx: left + width,
+      //       maxAy: top + height,
+      //       minBx: SAleft,
+      //       minBy: SAtop,
+      //       maxBx: SAleft + SAwidth,
+      //       maxBy: SAtop + SAheight,
+      //     })
+      //   ) {
+      //     select();
+      //     selectedItemsIds.current = [...selectedItemsIds.current, id];
+      //   } else {
+      //     deselect();
+      //   }
+      // }
     }
 
     const mouseMove: React.MouseEventHandler<HTMLDivElement> = (e) => {
@@ -166,7 +215,25 @@ export const SelectableGrid: React.FC<ISelectableGridProps> = React.memo(
         <div className={"selectable-grid"} style={style}>
           {React.Children.map(children, (child, i) => {
             if (React.isValidElement(child)) {
-              return React.cloneElement(child, { selectedRef: items[i] });
+              const row = currRow.current;
+              const cellStart = Number(nextStart.current);
+              const cellEnd = Math.min(
+                cellStart + (child.props.span || 1),
+                cols + 1
+              );
+              if (cellEnd > cols) {
+                nextStart.current = 1;
+                currRow.current++;
+              } else {
+                nextStart.current = cellEnd;
+              }
+              return React.cloneElement(child, {
+                selectedRef: items[i],
+                position: i,
+                cellStart,
+                cellEnd,
+                row,
+              });
             }
             throw Error("Child must be GridItem");
           })}

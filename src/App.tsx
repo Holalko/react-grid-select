@@ -5,9 +5,8 @@ import { range } from "./utils";
 import { GridItem } from "./GridItem";
 
 function App() {
-  const cols = 30;
-  const rows = 30;
-
+  const cols = 20;
+  const rows = 20;
   const [selectedBlocks, setSelectedBlocks] = React.useState(0);
 
   const handleSelect = React.useCallback((selected: Array<number | string>) => {
@@ -15,22 +14,25 @@ function App() {
   }, []);
 
   const memoizedBlocks = React.useMemo(
+    // () => generateRandomGrid(rows, cols),
     () =>
-      range(rows * cols).map((i) => (
-        <GridItem
-          key={i}
-          id={i}
-          render={({ isSelected }) => (
-            <div
-              className={`grid-item-block ${
-                isSelected ? "grid-item-block-selected" : ""
-              }`}
-            >
-              {isSelected ? "1" : ""}
-            </div>
-          )}
-        />
-      )),
+      range(rows * cols).map((index) => {
+        return (
+          <GridItem
+            key={index}
+            id={index}
+            render={({ isSelected, ref, className, styles }) => (
+              <div
+                ref={ref}
+                style={styles}
+                className={`${className} grid-item-block ${
+                  isSelected ? "grid-item-block-selected" : ""
+                }`}
+              />
+            )}
+          />
+        );
+      }),
     []
   );
 
