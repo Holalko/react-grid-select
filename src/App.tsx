@@ -1,24 +1,19 @@
 import React from 'react';
-import logo from './logo.svg';
 import './App.css';
+import {SelectableGrid} from "./SelectableGrid";
+import {range} from "./utils";
+import {GridItem} from "./GridItem";
 
 function App() {
-  return (
+    const cols = 31;
+    const rows = 24;
+    return (
     <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.tsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
+      <SelectableGrid rows={rows } cols={cols}>
+          {range(rows * cols).map(i => <GridItem key={i} render={({isSelected}) =>
+              <div className={`grid-item-block ${isSelected ? 'grid-item-block-selected' : ''}`} />
+          } />)}
+      </SelectableGrid>
     </div>
   );
 }
